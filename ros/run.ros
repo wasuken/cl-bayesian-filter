@@ -7,7 +7,8 @@ exec ros -Q -- $0 "$@"
   (ros:ensure-asdf)
   #+quicklisp(ql:quickload '(:trivial-hashtable-serialize
 							 :mylib
-							 :cl-bayesian-filter)
+							 :cl-bayesian-filter
+							 :cl-ppcre)
 						   :silent t)
   )
 
@@ -21,22 +22,40 @@ exec ros -Q -- $0 "$@"
 	  ;; todo: calling (main ham-path spam-path filepath)y
 	  (let ((help-msg (format nil
 							  "~{~A~%~}"
-							  "cmds:"
-							  "	learning: <type> <ham-filepath> <spam-filepath> [filepath-lst...]"
-							  "	scoring : <ham-filepath> <spam-filepath> <filepath>")))
-		(cond ((string= (car argv) "learning")
+							  '("cmds:"
+								"	learn: <type> <ham-filepath> <spam-filepath> [filepath-lst...]"
+								"	score : <ham-filepath> <spam-filepath> <filepath>"))))
+		(cond ((string= (car argv) "learn")
 			   (cl-bayesian-filter:learning (nth 1 argv) ;type
 											(nth 2 argv) ;ham-filepath
 											(nth 3 argv) ;spam-filepath
 											(nthcdr 4 argv) ;filepath-lst
 											)
 			   (print "learned!"))
-			  ((string= (car argv) "scoring")
-			   (print (cl-bayesian-filter:scoring (nth 1 argv) ;ham-filepath
+			  ((string= (car argv) "score")
+			   (print (cl-bayesian-filter:single-scoring (nth 1 argv) ;ham-filepath
 												  (nth 2 argv) ;spam-filepath
 												  (nth 3 argv) ;filepath
 												  )))
-			  (t (error (format nil "Command Not Found (~A)" cmd)))))
+			  ((string= (car argv) "multi-score")
+			   (let ((size (length (nthcdr 3 argv)))
+					 (cnt 1))
+				 (loop for score in (cl-bayesian-filter:multi-scoring (nth 1 argv) ;ham-filepath
+																 (nth 2 argv) ;spam-filepath
+																 (nthcdr 3 argv) ;filepath-lst
+																 )
+					  for fp in (nthcdr 3 argv)
+					do (progn
+						 (format t
+							   "[ ~A/~A ] filepath:~A score:~A~%"
+							   cnt
+							   size
+							   fp
+							   score)
+						 (incf cnt)))))
+			  ((string= (car argv) "help")
+			   (print help-msg))
+			  (t (error (format nil "Command Not Found (~A)" (car argv))))))
 	(error (e)
 	  (format *standard-output* "~&Error: ~A~%" e)
 	  (uiop:quit -1))))
