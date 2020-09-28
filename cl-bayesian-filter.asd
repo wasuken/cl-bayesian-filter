@@ -2,7 +2,7 @@
   :version "0.1.0"
   :author ""
   :license ""
-  :depends-on ("cl-ppcre" "trivial-hashtable-serialize")
+  :depends-on ("cl-json" "mylib")
   :components ((:module "src"
                 :components
                 ((:file "main"))))

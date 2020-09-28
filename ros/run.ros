@@ -5,11 +5,7 @@ exec ros -Q -- $0 "$@"
 |#
 (progn ;;init forms
   (ros:ensure-asdf)
-  #+quicklisp(ql:quickload '(:trivial-hashtable-serialize
-							 :mylib
-							 :cl-bayesian-filter
-							 :cl-ppcre)
-						   :silent t)
+  #+quicklisp(ql:quickload '(:cl-bayesian-filter :cl-json :mylib) :silent t)
   )
 
 (defpackage :ros.script.run.3809310558
@@ -23,35 +19,36 @@ exec ros -Q -- $0 "$@"
 	  (let ((help-msg (format nil
 							  "~{~A~%~}"
 							  '("cmds:"
-								"	learn: <type> <ham-filepath> <spam-filepath> [filepath-lst...]"
-								"	score : <ham-filepath> <spam-filepath> <filepath>"))))
+								"	learn        : <type> <tbl-path> [filepath-lst...]"
+								"	classify        : <tbl-path> <filepath>"
+								"	multi-classify  : <tbl-path> [filepath-lst...]"))))
 		(cond ((string= (car argv) "learn")
 			   (cl-bayesian-filter:learning (nth 1 argv) ;type
-											(nth 2 argv) ;ham-filepath
-											(nth 3 argv) ;spam-filepath
-											(nthcdr 4 argv) ;filepath-lst
+											(nth 2 argv) ;tbl-path
+											(nthcdr 3 argv) ;filepath-lst
 											)
 			   (print "learned!"))
-			  ((string= (car argv) "score")
-			   (print (cl-bayesian-filter:single-scoring (nth 1 argv) ;ham-filepath
-												  (nth 2 argv) ;spam-filepath
-												  (nth 3 argv) ;filepath
-												  )))
-			  ((string= (car argv) "multi-score")
-			   (let ((size (length (nthcdr 3 argv)))
+			  ((string= (car argv) "classify")
+			   (print (cl-bayesian-filter:classify
+					   (nth 1 argv) ;tbl-path
+					   (nth 2 argv) ;filepath
+					   )))
+			  ((string= (car argv) "multi-classify")
+			   (let ((size (length (nthcdr 1 argv)))
 					 (cnt 1))
-				 (loop for score in (cl-bayesian-filter:multi-scoring (nth 1 argv) ;ham-filepath
-																 (nth 2 argv) ;spam-filepath
-																 (nthcdr 3 argv) ;filepath-lst
-																 )
-					  for fp in (nthcdr 3 argv)
+				 (loop for rst in (cl-bayesian-filter:multi-classify
+								   (nth 1 argv)	;tbl-path
+								   (nthcdr 2 argv) ;filepath-lst
+								   )
+					  for fp in (nthcdr 1 argv)
 					do (progn
 						 (format t
-							   "[ ~A/~A ] filepath:~A score:~A~%"
+							   "[ ~A/~A ] filepath:~A category: ~A score:~A~%"
 							   cnt
 							   size
 							   fp
-							   score)
+							   (car rst)
+							   (cdr rst))
 						 (incf cnt)))))
 			  ((string= (car argv) "help")
 			   (print help-msg))

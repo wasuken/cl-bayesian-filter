@@ -1,117 +1,112 @@
 (defpackage cl-bayesian-filter
-  (:use :cl :ppcre :trivial-hashtable-serialize)
-  (:export :learning :single-scoring :multi-scoring))
+  (:use :cl :cl-json)
+  (:export :train :score :classify))
 (in-package :cl-bayesian-filter)
+
+;;; https://qiita.com/katryo/items/6a2266ffafb7efa9a46c
+;;; これをCLに劣化変換してるだけ。
+
+(defparameter *vocabularies* '())
+(defparameter *cat-tbl* (make-hash-table :test #'equal))
+
+;; (defun load-table (tbl-path)
+;;   ())
+
+;; (defun save-table (tbl-path)
+;;   (with-open-file (s tbl-path :direction :output :if-exists)
+;; 	(format s "~A" (json:encode-json-to-string *cat-tbl*))))
+
+(defun voc-add (item)
+  (setf *vocabularies*
+		(remove-duplicates (append *vocabularies* `(,item))
+						   :test #'string=)))
+
+(defstruct category
+  (count 0 :type integer)
+  (word-table (make-hash-table :test #'equal) :type hash-table))
+
+;;; memo
+;;; Category count table => {cat => count}
+;;; words set
+;;; words count => {cat => {word => count}}
 
 (defparameter *n* 5)
 
-;;; reference: https://gitlab.com/ediethelm/trivial-hashtable-serialize
-(defun default-deserialize-fn (line)
-  "This function deserializes key/value pairs serialized by *DEFAULT-SERIALIZE-FN*."
-  (declare (type string line))
-  (let* ((pair (split-sequence:split-sequence #\$ line))
-		 (key-str (car pair))
-		 (value-str (cadr pair)))
-    (values key-str (parse-integer (read-from-string value-str)))))
-
-;;; Make :test as an option in make-hash-table
-;;; reference: https://gitlab.com/ediethelm/trivial-hashtable-serialize
-(defun load-hashtable (file-name &key
-								   (if-does-not-exist :create)
-								   (deserialize-fn #'default-deserialize-fn)
-								   (test #'eql))
-  (declare (type function deserialize-fn))
-  (let ((table (make-hash-table :test test)))
-    (with-open-file (fstream file-name :direction :input :if-does-not-exist if-does-not-exist)
-      (unless fstream
-	(error "Could not open file '~a'" file-name))
-
-      (loop for line = (read-line fstream nil 'eof)
-	 until (eq line 'eof)
-	 do
-	   (multiple-value-bind (key value) (funcall deserialize-fn line)
-	     (setf (gethash key table) value))))
-
-    (return-from load-hashtable table)))
-
-
 ;; str ops
-(defun n-gram (text n)
+(defun n-gram (text &optional (n *n*))
   (cond ((<= n (length text))
 		 (cons (subseq text 0 n)
 			   (n-gram (subseq text 1) n)))
 		(t '())))
 
-;;; table ops
-(defun read-table (ham-filepath spam-filepath)
-  (let ((ham-table (if (probe-file ham-filepath)
-					   (load-hashtable ham-filepath :test #'equal)
-					   (make-hash-table :test #'equal)))
-		(spam-table (if (probe-file spam-filepath)
-						(load-hashtable spam-filepath :test #'equal)
-						(make-hash-table :test #'equal))))
-	(values ham-table
-			spam-table)))
+(defun word-count-up (word cat)
+  (cond ((null (gethash cat *cat-tbl*))
+		 (let ((cat-obj (make-category)))
+		   (setf (gethash word (slot-value cat-obj 'word-table)) 0)
+		   (setf (gethash cat *cat-tbl*) cat-obj)))
+		((null (gethash word (slot-value (gethash cat *cat-tbl*) 'word-table)))
+		 (setf (gethash word (slot-value (gethash cat *cat-tbl*) 'word-table)) 0)))
+  (incf (gethash word (slot-value (gethash cat *cat-tbl*) 'word-table)))
+  (voc-add word))
 
-(defun save-table (ham-table ham-filepath spam-table spam-filepath)
-  (trivial-hashtable-serialize:save-hashtable ham-table ham-filepath)
-  (trivial-hashtable-serialize:save-hashtable spam-table spam-filepath))
+(defun category-count-up (cat)
+  (cond ((null (gethash cat *cat-tbl*))
+		 (let ((cat-obj (make-category)))
+		   (setf (gethash cat *cat-tbl*) cat-obj))))
+  (incf (slot-value (gethash cat *cat-tbl*) 'count)))
 
-(defun insert-table (table text)
-  (let ((ng (n-gram text *n*)))
-	(loop for gram in ng
-	 do (cond ((null (gethash gram table))
-			   (setf (gethash gram table) 1))
-			  (t (setf (gethash gram table) (1+ (gethash gram table))))))
-	table))
+(defun train (text category)
+  (let ((grams (n-gram text *n*)))
+	(loop for word in grams
+	   do (word-count-up word category))
+	(category-count-up category)))
 
-(defun scoring (ham-table spam-table filepath)
-  (let* ((ham-score 0)
-		 (spam-score 0)
-		 (text (format nil "~{~A~}" (mylib:read-file-to-list filepath)))
-		 (ng (n-gram text *n*)))
-	(loop for gram in ng
-	   do (progn
-			(setf ham-score (+ ham-score
-							   (if (gethash gram ham-table)
-								   (sqrt (gethash gram ham-table))
-								   0)))
-			(setf spam-score (+ spam-score
-								(if (gethash gram spam-table)
-									(sqrt (gethash gram spam-table))
-									0)))))
-	(values (- ham-score spam-score)
-			ham-score
-			spam-score)))
+(defun prior-prob (cat)
+  (let ((total-of-cat 0)
+		(total-of-words-in-cat 0))
+	(maphash #'(lambda (k v)
+				 (setf total-of-cat
+					   (+ total-of-cat (slot-value v 'count)))
+				 (setf total-of-words-in-cat
+					   (+ total-of-words-in-cat
+						  (slot-value (gethash cat *cat-tbl*) 'count))))
+			 *cat-tbl*)
+	(/ total-of-words-in-cat total-of-cat)))
 
-(defun multi-scoring (ham-filepath spam-filepath filepath-lst)
-  (multiple-value-bind (ham-table spam-table)
-	  (read-table ham-filepath spam-filepath)
-	(loop for fp in filepath-lst
-	   collect (scoring ham-table spam-table fp))))
+(defun num-of-appearance (word cat)
+  (if (and (gethash cat *cat-tbl*)
+		   (gethash word (slot-value (gethash cat *cat-tbl*) 'word-table)))
+	  (gethash word (slot-value (gethash cat *cat-tbl*) 'word-table))
+	  0))
 
-(defun single-scoring (ham-filepath spam-filepath filepath)
-  (multiple-value-bind (ham-table spam-table)
-	  (read-table ham-filepath spam-filepath)
-	(scoring ham-table spam-table filepath)
-	))
+(defun tbl-v-sum (tbl)
+  (let ((cnt 0))
+	(maphash #'(lambda (k v) (setf cnt (+ cnt v))) tbl)
+	cnt))
 
-(defun learning (type ham-filepath spam-filepath filepath-lst)
-  (multiple-value-bind (ham-table spam-table)
-	  (read-table ham-filepath spam-filepath)
-	(let ((lst-count (length filepath-lst))
-		  (count 1))
-	  (loop for filepath in filepath-lst
-		 do (let ((text (ppcre:regex-replace-all
-						 "[^\\w]"
-						 (format nil "~{~A~}" (mylib:read-file-to-list filepath))
-						 "")))
-			  (format t "~A ~A/~A~%" filepath count lst-count)
-			  ;; ここ縷ーぷごとに判定してるからかなり遅くなると思う。
-			  (cond ((string= type "ham")
-					 (insert-table ham-table text))
-					((string= type "spam")
-					 (insert-table spam-table text))
-					(t (error (format nil "Type Not Found (~A)" type))))
-			  (incf count))))
-	(save-table ham-table ham-filepath spam-table spam-filepath)))
+(defun word-prob (word cat)
+  (let ((numer (1+ (num-of-appearance word cat)))
+		(deno (+ (tbl-v-sum (slot-value (gethash cat *cat-tbl*) 'word-table))
+				 (length *vocabularies*))))
+	(/ numer deno)))
+
+(defun score (words cat &optional (f #'identity))
+  (let ((score (funcall f (prior-prob cat))))
+	(loop for word in words
+	   do (setf score (+ score (funcall f (word-prob word cat)))))
+	score))
+
+(defun classify (doc &optional (debug? nil))
+  (let ((guess-cat nil)
+		(max-prob most-negative-fixnum)
+		(words (n-gram doc)))
+	(maphash #'(lambda (cat v)
+				 (let ((prob (score words cat)))
+				   ;; 最悪な作り。作者は一体誰だ。
+				   (when debug?
+					 (format t "~A => ~A~%" cat (float prob)))
+				   (cond ((> prob max-prob)
+						  (setf max-prob prob)
+						  (setf guess-cat cat)))))
+			 *cat-tbl*)
+	(values guess-cat max-prob)))
